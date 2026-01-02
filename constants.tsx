@@ -3,7 +3,7 @@ import React from 'react';
 
 export const APP_CONFIG = {
   WEEKS_BEFORE: 1,
-  WEEKS_AFTER: 6,
+  WEEKS_AFTER: 12,
   // High quality lighter abstract background
   BG_IMAGE: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=2000',
   COLORS: {

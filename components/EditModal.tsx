@@ -34,8 +34,8 @@ const EditModal: React.FC<Props> = ({ day, onClose, onSave }) => {
         <div className="p-10 md:p-14">
           <header className="flex justify-between items-start mb-10">
             <div>
-              <h2 className="text-4xl font-black text-slate-900 tracking-tighter mb-1">{day.type}</h2>
-              <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">{formattedDate}</p>
+              <h2 className="text-4xl font-black text-slate-900 tracking-tighter mb-1">{formattedDate}</h2>
+              <p className="text-slate-500 font-black uppercase tracking-[0.2em] text-xs">{day.type}</p>
             </div>
             <button 
               onClick={onClose}

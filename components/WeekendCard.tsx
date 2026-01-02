@@ -28,11 +28,11 @@ const WeekendCard: React.FC<Props> = ({ day, activeSupport, onEdit }) => {
       {/* Dynamic Glow Effect */}
       <div className="absolute -inset-2 bg-white/10 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
-      {/* Date Header */}
+      {/* Date Header - Reversed as requested: Date is big, Day name is small */}
       <div className="flex justify-between items-start mb-6 relative z-10">
         <div>
-          <h3 className="text-3xl font-black tracking-tighter text-white drop-shadow-md">{day.type}</h3>
-          <p className="text-white/80 font-bold uppercase tracking-widest text-[10px] mt-1">{formattedDate}</p>
+          <h3 className="text-4xl font-black tracking-tighter text-white drop-shadow-md">{formattedDate}</h3>
+          <p className="text-white/80 font-black uppercase tracking-[0.2em] text-[10px] mt-1">{day.type}</p>
         </div>
         <div className="flex items-center gap-2">
           {day.recurring !== 'none' && (
