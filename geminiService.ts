@@ -3,7 +3,8 @@ import { GoogleGenAI } from "@google/genai";
 
 export const getSmartWeekendSuggestion = async (isBusy: boolean): Promise<string> => {
   // Use a fresh instance with the required initialization pattern
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = import.meta.env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY;
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const prompt = isBusy 
