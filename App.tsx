@@ -7,7 +7,7 @@ import EditModal from './components/EditModal';
 import { supabase } from './supabaseClient';
 
 const App: React.FC = () => {
-  const STORAGE_KEY = 'zenweekend_v8_final';
+  const STORAGE_KEY = 'zenweekend_v9_stable';
 
   // 1. Initial Load from Local Storage (Instant UI)
   const [state, setState] = useState<AppState>(() => {
@@ -15,6 +15,7 @@ const App: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as AppState;
+        // Restore Date objects from strings
         Object.values(parsed.weekendDays).forEach(day => {
           day.date = new Date(day.date);
         });
@@ -45,13 +46,14 @@ const App: React.FC = () => {
     const syncWithCloud = async () => {
       setLoading(true);
       try {
+        console.log("🔄 Starting Cloud Sync...");
         const [plansRes, settingsRes] = await Promise.all([
           supabase.from('weekend_plans').select('*'),
           supabase.from('weekend_settings').select('*').eq('id', 1).maybeSingle()
         ]);
 
         if (plansRes.error) {
-          console.error("❌ Plans fetch error:", plansRes.error);
+          console.error("❌ Supabase Plans Error:", plansRes.error);
         }
         
         const cloudPlans: Record<string, WeekendDay> = {};
@@ -61,9 +63,10 @@ const App: React.FC = () => {
               id: p.id,
               date: new Date(p.date),
               type: p.type as any,
-              plan: p.plan,
-              isBusy: p.is_busy,
-              isSupport: p.is_support,
+              plan: p.plan || '',
+              // Explicitly cast to boolean to handle potential nulls from DB
+              isBusy: Boolean(p.is_busy),
+              isSupport: Boolean(p.is_support),
               recurring: 'none' 
             };
           });
@@ -72,7 +75,21 @@ const App: React.FC = () => {
         const cloudSettings = settingsRes.data?.recurring_support;
 
         setState(prev => {
-          const mergedDays = { ...prev.weekendDays, ...cloudPlans };
+          // SMART MERGE: 
+          // 1. Start with local state (from LocalStorage)
+          const mergedDays = { ...prev.weekendDays };
+          
+          // 2. Only let cloud overwrite if local is empty OR if cloud has a plan/busy status
+          Object.keys(cloudPlans).forEach(id => {
+            const cloudDay = cloudPlans[id];
+            const localDay = mergedDays[id];
+            
+            // If local doesn't exist, or cloud has actual content/status, prefer cloud
+            if (!localDay || cloudDay.isBusy || cloudDay.plan !== '') {
+              mergedDays[id] = cloudDay;
+            }
+          });
+
           const mergedSettings = cloudSettings ? { ...prev.recurringSupport, ...cloudSettings } : prev.recurringSupport;
           
           return {
@@ -80,8 +97,10 @@ const App: React.FC = () => {
             recurringSupport: mergedSettings
           };
         });
+        
+        console.log("✅ Cloud Sync Success");
       } catch (err) {
-        console.warn("⚠️ Sync partially failed.", err);
+        console.warn("⚠️ Sync partially failed. Check network.", err);
       } finally {
         setLoading(false);
       }
@@ -89,7 +108,7 @@ const App: React.FC = () => {
     syncWithCloud();
   }, []);
 
-  // 3. Persist to Local Storage
+  // 3. Persist to Local Storage whenever state changes
   useEffect(() => {
     if (!loading) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -126,24 +145,37 @@ const App: React.FC = () => {
 
   const handleUpdateDay = async (updatedDay: WeekendDay) => {
     setSyncing(true);
-    setState(prev => ({
-      ...prev,
-      weekendDays: { ...prev.weekendDays, [updatedDay.id]: updatedDay }
-    }));
+    
+    // 1. Immediate UI update (Optimistic)
+    const newState = {
+      ...state,
+      weekendDays: { ...state.weekendDays, [updatedDay.id]: updatedDay }
+    };
+    setState(newState);
     setEditingDay(null);
 
+    // 2. Immediate LocalStorage update (Safety buffer)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newState));
+
+    // 3. Cloud update
     try {
-      const { error } = await supabase.from('weekend_plans').upsert({
+      console.log(`📤 Sending ${updatedDay.id} to Supabase... (Busy: ${updatedDay.isBusy})`);
+      const { data, error } = await supabase.from('weekend_plans').upsert({
         id: updatedDay.id,
         date: updatedDay.date.toISOString(),
         type: updatedDay.type,
         plan: updatedDay.plan,
         is_busy: updatedDay.isBusy,
         is_support: updatedDay.isSupport
-      }, { onConflict: 'id' });
-      if (error) throw error;
+      }, { onConflict: 'id' }).select();
+      
+      if (error) {
+        throw error;
+      }
+      console.log(`✅ Supabase update confirmed for ${updatedDay.id}`, data);
     } catch (e) {
-      console.error("❌ Database Save Failed.", e);
+      console.error("❌ Database Save Failed. Ensure table columns 'id', 'date', 'type', 'plan', 'is_busy', 'is_support' exist.", e);
+      alert("Failed to sync with cloud. Changes are saved locally for now.");
     } finally {
       setSyncing(false);
     }
@@ -197,7 +229,7 @@ const App: React.FC = () => {
     if (diffDays > 6 && diffDays <= 13) return "Next Weekend";
     
     const diffWeeks = Math.floor(diffDays / 7);
-    return diffWeeks > 0 ? `${diffWeeks}w Forward` : `Past`;
+    return diffWeeks > 0 ? `${diffWeeks}w Forward` : `Past History`;
   };
 
   const bgImage = state.recurringSupport.customBg || APP_CONFIG.BG_IMAGE;
@@ -207,15 +239,15 @@ const App: React.FC = () => {
       className="min-h-screen w-full bg-cover bg-center bg-fixed relative flex flex-col items-center p-4 md:p-6 overflow-y-auto transition-all duration-1000 no-scrollbar"
       style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.9)), url(${bgImage})` }}
     >
-      <header className="w-full max-w-7xl mb-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6 z-10 pt-6">
+      <header className="w-full max-w-7xl mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 z-10 pt-6">
         <div>
           <h1 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-1 drop-shadow-sm">
             ZenWeekend
           </h1>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">
-              {(loading || syncing) ? (loading ? 'Restoring Session...' : 'Cloud Syncing...') : 'Connected & Secure'}
+            <div className={`w-2 h-2 rounded-full ${syncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">
+              {(loading || syncing) ? (loading ? 'Loading Database...' : 'Cloud Saving...') : 'Sync Active'}
             </p>
           </div>
         </div>
@@ -271,7 +303,6 @@ const App: React.FC = () => {
 
             return (
               <React.Fragment key={`week-block-${wIdx}`}>
-                {/* Visual separator for new weeks in the sequence */}
                 <div className="col-span-full mt-4 flex items-center gap-4">
                   <div className={`px-4 py-1.5 rounded-full border text-[9px] font-black uppercase tracking-[0.2em] shadow-sm backdrop-blur-md transition-all ${
                     isTodayWeek ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-400 border-white'
