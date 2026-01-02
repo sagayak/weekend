@@ -7,25 +7,26 @@ import EditModal from './components/EditModal';
 import { supabase } from './supabaseClient';
 
 const App: React.FC = () => {
-  // Initialize state from Local Storage immediately to prevent "flicker" or data loss on reload
+  const STORAGE_KEY = 'zenweekend_v8_final';
+
+  // 1. Initial Load from Local Storage (Instant UI)
   const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem('zenweekend_state_v4');
+    const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as AppState;
-        // Convert ISO strings back to Date objects
         Object.values(parsed.weekendDays).forEach(day => {
           day.date = new Date(day.date);
         });
         return parsed;
       } catch (e) {
-        console.error("Initial local storage hydration failed", e);
+        console.error("Local storage restoration failed:", e);
       }
     }
     return {
       weekendDays: {},
       recurringSupport: { 
-        saturday: true, // Internal default: always both if support is active for the week
+        saturday: true, 
         sunday: true, 
         interval: 1, 
         baseDate: new Date().toISOString().split('T')[0],
@@ -35,77 +36,101 @@ const App: React.FC = () => {
   });
 
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [editingDay, setEditingDay] = useState<WeekendDay | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync from Supabase on mount
+  // 2. Sync from Supabase (Merge with local)
   useEffect(() => {
-    const fetchData = async () => {
+    const syncWithCloud = async () => {
       setLoading(true);
       try {
-        const [plansResponse, settingsResponse] = await Promise.all([
+        console.log("🔄 Syncing with Cloud...");
+        const [plansRes, settingsRes] = await Promise.all([
           supabase.from('weekend_plans').select('*'),
-          supabase.from('weekend_settings').select('*').single()
+          supabase.from('weekend_settings').select('*').eq('id', 1).maybeSingle()
         ]);
 
-        const plans = plansResponse.data;
-        const settings = settingsResponse.data;
-
-        const plansMap: Record<string, WeekendDay> = {};
-        if (plans && plans.length > 0) {
-          plans.forEach(p => {
-            plansMap[p.id] = {
+        if (plansRes.error) {
+          console.error("❌ Plans fetch error:", plansRes.error);
+        }
+        
+        const cloudPlans: Record<string, WeekendDay> = {};
+        if (plansRes.data) {
+          plansRes.data.forEach(p => {
+            cloudPlans[p.id] = {
               id: p.id,
               date: new Date(p.date),
               type: p.type as any,
               plan: p.plan,
               isBusy: p.is_busy,
               isSupport: p.is_support,
-              recurring: (p.recurring || 'none') as any
+              recurring: 'none' // Default since column is missing in DB
             };
           });
         }
 
-        setState(prev => ({
-          ...prev,
-          weekendDays: plans && plans.length > 0 ? { ...prev.weekendDays, ...plansMap } : prev.weekendDays,
-          recurringSupport: settings?.recurring_support ? { ...prev.recurringSupport, ...settings.recurring_support } : prev.recurringSupport
-        }));
+        const cloudSettings = settingsRes.data?.recurring_support;
+
+        setState(prev => {
+          // Merge logic: Prioritize Cloud for actual plan content
+          const mergedDays = { ...prev.weekendDays, ...cloudPlans };
+          const mergedSettings = cloudSettings ? { ...prev.recurringSupport, ...cloudSettings } : prev.recurringSupport;
+          
+          return {
+            weekendDays: mergedDays,
+            recurringSupport: mergedSettings
+          };
+        });
+        
+        console.log("✅ Cloud Sync Complete");
       } catch (err) {
-        console.error("Supabase sync failed, relying on local storage", err);
+        console.warn("⚠️ Sync partially failed. Check if Supabase tables are ready.", err);
       } finally {
         setLoading(false);
       }
     };
-    fetchData();
+    syncWithCloud();
   }, []);
 
-  // Persist to local storage whenever state changes, after initial loading
+  // 3. Persist to Local Storage
   useEffect(() => {
     if (!loading) {
-      localStorage.setItem('zenweekend_state_v4', JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
   }, [state, loading]);
 
-  const dateRange = useMemo(() => {
-    const days: Date[] = [];
+  const groupedWeeks = useMemo(() => {
+    const weeks: Date[][] = [];
     const today = new Date();
+    
     const startDate = new Date(today);
     startDate.setDate(today.getDate() - today.getDay() - (7 * APP_CONFIG.WEEKS_BEFORE));
+    
     const endDate = new Date(today);
     endDate.setDate(today.getDate() + (6 - today.getDay()) + (7 * APP_CONFIG.WEEKS_AFTER));
 
     const current = new Date(startDate);
+    let currentWeek: Date[] = [];
+
     while (current <= endDate) {
-      if (current.getDay() === 6 || current.getDay() === 0) {
-        days.push(new Date(current));
+      const day = current.getDay();
+      if (day === 6 || day === 0) {
+        currentWeek.push(new Date(current));
+        if (day === 0) {
+          weeks.push(currentWeek);
+          currentWeek = [];
+        }
       }
       current.setDate(current.getDate() + 1);
     }
-    return days;
+    if (currentWeek.length > 0) weeks.push(currentWeek);
+    return weeks;
   }, []);
 
   const handleUpdateDay = async (updatedDay: WeekendDay) => {
+    setSyncing(true);
+    // Optimistic Update
     setState(prev => ({
       ...prev,
       weekendDays: { ...prev.weekendDays, [updatedDay.id]: updatedDay }
@@ -113,50 +138,47 @@ const App: React.FC = () => {
     setEditingDay(null);
 
     try {
-      await supabase.from('weekend_plans').upsert({
+      console.log(`📤 Saving to DB: ${updatedDay.id}...`);
+      // OMITTING 'recurring' column to prevent DB error
+      const { error } = await supabase.from('weekend_plans').upsert({
         id: updatedDay.id,
         date: updatedDay.date.toISOString(),
         type: updatedDay.type,
         plan: updatedDay.plan,
         is_busy: updatedDay.isBusy,
-        is_support: updatedDay.isSupport,
-        recurring: updatedDay.recurring
-      });
+        is_support: updatedDay.isSupport
+      }, { onConflict: 'id' });
+      
+      if (error) throw error;
+      console.log(`✅ Success: ${updatedDay.id}`);
     } catch (e) {
-      console.error("Failed to sync plan to Supabase", e);
+      console.error("❌ Database Save Failed. Ensure tables exist.", e);
+    } finally {
+      setSyncing(false);
     }
   };
 
   const updateSupportSettings = async (updates: Partial<RecurringSupportSettings>) => {
+    setSyncing(true);
     const newSettings = { ...state.recurringSupport, ...updates };
     setState(prev => ({ ...prev, recurringSupport: newSettings }));
+    
     try {
-      await supabase.from('weekend_settings').upsert({ id: 1, recurring_support: newSettings });
+      const { error } = await supabase.from('weekend_settings').upsert({ 
+        id: 1, 
+        recurring_support: newSettings 
+      }, { onConflict: 'id' });
+      
+      if (error) throw error;
     } catch (e) { 
-      console.error("Failed to sync settings to Supabase", e); 
+      console.error("❌ Settings Save Failed:", e); 
+    } finally {
+      setSyncing(false);
     }
   };
 
-  const handleBgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        updateSupportSettings({ customBg: reader.result as string });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  /**
-   * Refined support logic: Saturday and Sunday of the same week are always paired.
-   * "Start Date" determines the first weekend unit.
-   */
   const isDateSupport = (targetDate: Date) => {
     const { interval, baseDate } = state.recurringSupport;
-    
-    // Helper to get Monday of the week (Monday = 1)
-    // If it's Sunday (0), we move it back to the previous Monday to keep it with Saturday
     const getWeekMonday = (d: Date) => {
       const date = new Date(d);
       const day = date.getDay();
@@ -165,126 +187,175 @@ const App: React.FC = () => {
       monday.setHours(0, 0, 0, 0);
       return monday;
     };
-
     const startMonday = getWeekMonday(new Date(baseDate));
     const targetMonday = getWeekMonday(targetDate);
-
-    // Calculate absolute week difference between the starting week and target week
     const diffWeeks = Math.round((targetMonday.getTime() - startMonday.getTime()) / (7 * 24 * 60 * 60 * 1000));
-    
-    // Check if this week falls on the frequency cycle
     return Math.abs(diffWeeks) % (interval || 1) === 0;
+  };
+
+  const getWeekLabel = (dates: Date[]) => {
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const weekSun = new Date(dates[dates.length - 1]);
+    weekSun.setHours(0,0,0,0);
+    
+    const diffTime = weekSun.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays >= 0 && diffDays <= 6) return "This Weekend";
+    if (diffDays < 0 && diffDays >= -7) return "Last Weekend";
+    if (diffDays > 6 && diffDays <= 13) return "Next Weekend";
+    
+    const diffWeeks = Math.floor(diffDays / 7);
+    return diffWeeks > 0 ? `In ${diffWeeks} Weeks` : `Past Record`;
   };
 
   const bgImage = state.recurringSupport.customBg || APP_CONFIG.BG_IMAGE;
 
   return (
     <div 
-      className="min-h-screen w-full bg-cover bg-center bg-fixed relative flex flex-col items-center p-4 md:p-8 overflow-y-auto transition-all duration-1000"
-      style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.85)), url(${bgImage})` }}
+      className="min-h-screen w-full bg-cover bg-center bg-fixed relative flex flex-col items-center p-4 md:p-8 overflow-y-auto transition-all duration-1000 no-scrollbar"
+      style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.8)), url(${bgImage})` }}
     >
-      <header className="w-full max-w-6xl mb-12 flex flex-col md:flex-row md:items-end justify-between gap-6 z-10 pt-10">
-        <div className="animate-in fade-in slide-in-from-top duration-700">
-          <h1 className="text-5xl md:text-7xl font-black tracking-tight text-slate-900 mb-2 drop-shadow-sm">
+      <header className="w-full max-w-6xl mb-16 flex flex-col md:flex-row md:items-end justify-between gap-8 z-10 pt-10">
+        <div className="animate-in fade-in slide-in-from-top duration-1000">
+          <h1 className="text-6xl md:text-8xl font-black tracking-tighter text-slate-900 mb-2 drop-shadow-sm flex items-center gap-4">
             ZenWeekend
           </h1>
-          <div className="flex items-center gap-3">
-            <p className="text-slate-600 text-lg font-medium">Clear plans, calm mind.</p>
-            {loading && (
-              <div className="flex items-center gap-2 text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-100 px-3 py-1 rounded-full border border-emerald-200 shadow-sm">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Syncing
+          <div className="flex items-center gap-4">
+            <p className="text-slate-500 text-xl font-medium tracking-tight">Syncing across all devices.</p>
+            {(loading || syncing) && (
+              <div className="flex items-center gap-2 text-[10px] font-black text-white uppercase tracking-widest bg-slate-900 px-4 py-1.5 rounded-full shadow-lg animate-pulse">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                {loading ? 'Fetching' : 'Saving'}
               </div>
             )}
           </div>
         </div>
 
-        <div className="bg-white/70 backdrop-blur-2xl p-6 rounded-[2.5rem] flex flex-wrap gap-6 items-center border border-white/80 shadow-2xl ring-1 ring-black/5">
-          <div className="flex flex-col gap-1.5">
-             <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Frequency</span>
-             <div className="flex items-center gap-2">
-                <select 
-                  className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm min-w-[120px]"
-                  value={state.recurringSupport.interval}
-                  onChange={(e) => updateSupportSettings({ interval: parseInt(e.target.value) })}
-                >
-                   <option value="1">Every Week</option>
-                   <option value="2">Every 2 Weeks</option>
-                   <option value="3">Every 3 Weeks</option>
-                   <option value="4">Every 4 Weeks</option>
-                </select>
-             </div>
+        <div className="bg-white/90 backdrop-blur-3xl p-8 rounded-[3rem] flex flex-wrap gap-8 items-center border border-white/50 shadow-2xl ring-1 ring-black/5 animate-in slide-in-from-right duration-700">
+          <div className="flex flex-col gap-2">
+             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Support Interval</span>
+             <select 
+                className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm min-w-[160px]"
+                value={state.recurringSupport.interval}
+                onChange={(e) => updateSupportSettings({ interval: parseInt(e.target.value) })}
+              >
+                 <option value="1">Every Week</option>
+                 <option value="2">Every 2 Weeks</option>
+                 <option value="3">Every 3 Weeks</option>
+                 <option value="4">Every 4 Weeks</option>
+              </select>
           </div>
           
-          <div className="flex flex-col gap-1.5">
-             <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Start From Week</span>
+          <div className="flex flex-col gap-2">
+             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Base Week</span>
              <input 
               type="date"
-              className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm"
+              className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm"
               value={state.recurringSupport.baseDate.split('T')[0]}
               onChange={(e) => updateSupportSettings({ baseDate: e.target.value })}
              />
           </div>
 
-          <div className="h-10 w-[1px] bg-slate-200 mx-2 hidden lg:block"></div>
-          
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-5 py-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm font-black text-[10px] uppercase tracking-widest"
-            title="Upload Background"
+            className="flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-2xl hover:bg-black transition-all shadow-xl font-black text-xs uppercase tracking-widest self-end"
           >
             <Icons.Image />
             <span>Theme</span>
           </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleBgUpload} 
-            accept="image/*" 
-            className="hidden" 
-          />
+          <input type="file" ref={fileInputRef} onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onloadend = () => updateSupportSettings({ customBg: reader.result as string });
+              reader.readAsDataURL(file);
+            }
+          }} accept="image/*" className="hidden" />
         </div>
       </header>
 
-      <main className="w-full max-w-6xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 pb-40">
-        {dateRange.map((date, idx) => {
-          const id = date.toISOString().split('T')[0];
-          const isSaturday = date.getDay() === 6;
-          const dayType = isSaturday ? 'Saturday' : 'Sunday';
-          const storedDay = state.weekendDays[id];
-          const hasRecurringSupport = isDateSupport(date);
-
-          const dayData: WeekendDay = storedDay || {
-            id, date, type: dayType, plan: '', isBusy: false, isSupport: false, recurring: 'none'
-          };
+      <main className="w-full max-w-6xl pb-48 space-y-32">
+        {groupedWeeks.map((weekDates, wIdx) => {
+          const weekLabel = getWeekLabel(weekDates);
+          const isTodayWeek = weekLabel === "This Weekend";
 
           return (
-            <div key={id} style={{ animationDelay: `${idx * 40}ms` }} className="animate-in fade-in zoom-in duration-500 fill-mode-both">
-              <WeekendCard 
-                day={dayData}
-                activeSupport={dayData.isSupport || hasRecurringSupport}
-                onEdit={() => setEditingDay(dayData)}
-              />
-            </div>
+            <section key={`week-${wIdx}`} className="space-y-12 relative group/week">
+              {/* Timeline Style Placeholder */}
+              <div className="flex flex-col items-center gap-4 sticky top-10 z-20">
+                <div className={`px-10 py-4 rounded-full border text-xs font-black uppercase tracking-[0.4em] shadow-2xl backdrop-blur-3xl transition-all duration-700 transform ${
+                  isTodayWeek 
+                    ? 'bg-slate-900 text-white border-slate-900 scale-110 shadow-slate-300' 
+                    : 'bg-white/95 text-slate-400 border-white/50 group-hover/week:scale-105'
+                }`}>
+                  {weekLabel}
+                </div>
+                <div className={`w-px h-12 transition-all duration-700 ${isTodayWeek ? 'bg-slate-900/40' : 'bg-slate-400/20'}`} />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-12 max-w-5xl mx-auto px-4">
+                {weekDates.map((date, dIdx) => {
+                  const id = date.toISOString().split('T')[0];
+                  const storedDay = state.weekendDays[id];
+                  const hasRecurringSupport = isDateSupport(date);
+
+                  const dayData: WeekendDay = storedDay || {
+                    id, date, type: date.getDay() === 6 ? 'Saturday' : 'Sunday', 
+                    plan: '', isBusy: false, isSupport: false, recurring: 'none'
+                  };
+
+                  return (
+                    <div 
+                      key={id} 
+                      className="animate-in fade-in zoom-in duration-700 fill-mode-both"
+                      style={{ animationDelay: `${dIdx * 150}ms` }}
+                    >
+                      <WeekendCard 
+                        day={dayData}
+                        activeSupport={dayData.isSupport || hasRecurringSupport}
+                        onEdit={() => setEditingDay(dayData)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           );
         })}
       </main>
 
-      {editingDay && <EditModal day={editingDay} onClose={() => setEditingDay(null)} onSave={handleUpdateDay} />}
+      {editingDay && (
+        <EditModal 
+          day={editingDay} 
+          onClose={() => setEditingDay(null)} 
+          onSave={handleUpdateDay} 
+        />
+      )}
       
-      <footer className="fixed bottom-8 z-30">
-        <div className="bg-white/90 backdrop-blur-3xl px-10 py-5 rounded-full flex items-center gap-12 shadow-2xl border border-white ring-1 ring-black/5 animate-in slide-in-from-bottom duration-700">
-          <div className="flex items-center gap-3 group">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-green-600 shadow-lg shadow-green-200 transition-transform group-hover:scale-125"></div>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">Open</span>
+      <footer className="fixed bottom-12 z-30 pointer-events-none w-full flex justify-center">
+        <div className="bg-white/95 backdrop-blur-3xl px-14 py-8 rounded-full flex items-center gap-20 shadow-2xl border border-white/50 ring-1 ring-black/5 animate-in slide-in-from-bottom duration-1000 pointer-events-auto">
+          <div className="flex items-center gap-5 group">
+            <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.OPEN} shadow-xl shadow-green-100 transition-all group-hover:scale-125`}></div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Open</span>
+              <span className="text-[8px] font-bold uppercase text-slate-400">Available</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3 group">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-rose-500 to-red-700 shadow-lg shadow-red-200 transition-transform group-hover:scale-125"></div>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">Busy</span>
+          <div className="flex items-center gap-5 group">
+            <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.BUSY} shadow-xl shadow-red-100 transition-all group-hover:scale-125`}></div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Busy</span>
+              <span className="text-[8px] font-bold uppercase text-slate-400">Planned</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3 group">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 shadow-lg shadow-orange-200 transition-transform group-hover:scale-125"></div>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">Support</span>
+          <div className="flex items-center gap-5 group">
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 shadow-xl shadow-orange-100 transition-all group-hover:scale-125"></div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Support</span>
+              <span className="text-[8px] font-bold uppercase text-slate-400">On Call</span>
+            </div>
           </div>
         </div>
       </footer>
