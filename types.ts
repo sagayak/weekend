@@ -17,6 +17,7 @@ export interface RecurringSupportSettings {
   sunday: boolean;
   interval: number; // e.g., every 1, 2, or 3 weeks
   baseDate: string; // ISO string to anchor the interval calculation
+  customBg?: string; // Base64 or URL for custom background
 }
 
 export interface AppState {
