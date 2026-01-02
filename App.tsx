@@ -45,7 +45,6 @@ const App: React.FC = () => {
     const syncWithCloud = async () => {
       setLoading(true);
       try {
-        console.log("🔄 Syncing with Cloud...");
         const [plansRes, settingsRes] = await Promise.all([
           supabase.from('weekend_plans').select('*'),
           supabase.from('weekend_settings').select('*').eq('id', 1).maybeSingle()
@@ -65,7 +64,7 @@ const App: React.FC = () => {
               plan: p.plan,
               isBusy: p.is_busy,
               isSupport: p.is_support,
-              recurring: 'none' // Default since column is missing in DB
+              recurring: 'none' 
             };
           });
         }
@@ -73,7 +72,6 @@ const App: React.FC = () => {
         const cloudSettings = settingsRes.data?.recurring_support;
 
         setState(prev => {
-          // Merge logic: Prioritize Cloud for actual plan content
           const mergedDays = { ...prev.weekendDays, ...cloudPlans };
           const mergedSettings = cloudSettings ? { ...prev.recurringSupport, ...cloudSettings } : prev.recurringSupport;
           
@@ -82,10 +80,8 @@ const App: React.FC = () => {
             recurringSupport: mergedSettings
           };
         });
-        
-        console.log("✅ Cloud Sync Complete");
       } catch (err) {
-        console.warn("⚠️ Sync partially failed. Check if Supabase tables are ready.", err);
+        console.warn("⚠️ Sync partially failed.", err);
       } finally {
         setLoading(false);
       }
@@ -130,7 +126,6 @@ const App: React.FC = () => {
 
   const handleUpdateDay = async (updatedDay: WeekendDay) => {
     setSyncing(true);
-    // Optimistic Update
     setState(prev => ({
       ...prev,
       weekendDays: { ...prev.weekendDays, [updatedDay.id]: updatedDay }
@@ -138,8 +133,6 @@ const App: React.FC = () => {
     setEditingDay(null);
 
     try {
-      console.log(`📤 Saving to DB: ${updatedDay.id}...`);
-      // OMITTING 'recurring' column to prevent DB error
       const { error } = await supabase.from('weekend_plans').upsert({
         id: updatedDay.id,
         date: updatedDay.date.toISOString(),
@@ -148,11 +141,9 @@ const App: React.FC = () => {
         is_busy: updatedDay.isBusy,
         is_support: updatedDay.isSupport
       }, { onConflict: 'id' });
-      
       if (error) throw error;
-      console.log(`✅ Success: ${updatedDay.id}`);
     } catch (e) {
-      console.error("❌ Database Save Failed. Ensure tables exist.", e);
+      console.error("❌ Database Save Failed.", e);
     } finally {
       setSyncing(false);
     }
@@ -168,7 +159,6 @@ const App: React.FC = () => {
         id: 1, 
         recurring_support: newSettings 
       }, { onConflict: 'id' });
-      
       if (error) throw error;
     } catch (e) { 
       console.error("❌ Settings Save Failed:", e); 
@@ -207,52 +197,49 @@ const App: React.FC = () => {
     if (diffDays > 6 && diffDays <= 13) return "Next Weekend";
     
     const diffWeeks = Math.floor(diffDays / 7);
-    return diffWeeks > 0 ? `In ${diffWeeks} Weeks` : `Past Record`;
+    return diffWeeks > 0 ? `${diffWeeks}w Forward` : `Past`;
   };
 
   const bgImage = state.recurringSupport.customBg || APP_CONFIG.BG_IMAGE;
 
   return (
     <div 
-      className="min-h-screen w-full bg-cover bg-center bg-fixed relative flex flex-col items-center p-4 md:p-8 overflow-y-auto transition-all duration-1000 no-scrollbar"
-      style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.8)), url(${bgImage})` }}
+      className="min-h-screen w-full bg-cover bg-center bg-fixed relative flex flex-col items-center p-4 md:p-6 overflow-y-auto transition-all duration-1000 no-scrollbar"
+      style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.9)), url(${bgImage})` }}
     >
-      <header className="w-full max-w-6xl mb-16 flex flex-col md:flex-row md:items-end justify-between gap-8 z-10 pt-10">
-        <div className="animate-in fade-in slide-in-from-top duration-1000">
-          <h1 className="text-6xl md:text-8xl font-black tracking-tighter text-slate-900 mb-2 drop-shadow-sm flex items-center gap-4">
+      <header className="w-full max-w-7xl mb-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6 z-10 pt-6">
+        <div>
+          <h1 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-1 drop-shadow-sm">
             ZenWeekend
           </h1>
-          <div className="flex items-center gap-4">
-            <p className="text-slate-500 text-xl font-medium tracking-tight">Syncing across all devices.</p>
-            {(loading || syncing) && (
-              <div className="flex items-center gap-2 text-[10px] font-black text-white uppercase tracking-widest bg-slate-900 px-4 py-1.5 rounded-full shadow-lg animate-pulse">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                {loading ? 'Fetching' : 'Saving'}
-              </div>
-            )}
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">
+              {(loading || syncing) ? (loading ? 'Restoring Session...' : 'Cloud Syncing...') : 'Connected & Secure'}
+            </p>
           </div>
         </div>
 
-        <div className="bg-white/90 backdrop-blur-3xl p-8 rounded-[3rem] flex flex-wrap gap-8 items-center border border-white/50 shadow-2xl ring-1 ring-black/5 animate-in slide-in-from-right duration-700">
-          <div className="flex flex-col gap-2">
-             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Support Interval</span>
+        <div className="bg-white/60 backdrop-blur-xl p-4 rounded-3xl flex flex-wrap gap-4 items-center border border-white shadow-lg ring-1 ring-black/5">
+          <div className="flex flex-col gap-0.5">
+             <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest px-1">Rotation</span>
              <select 
-                className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm min-w-[160px]"
+                className="bg-white/80 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm min-w-[110px]"
                 value={state.recurringSupport.interval}
                 onChange={(e) => updateSupportSettings({ interval: parseInt(e.target.value) })}
               >
-                 <option value="1">Every Week</option>
-                 <option value="2">Every 2 Weeks</option>
-                 <option value="3">Every 3 Weeks</option>
-                 <option value="4">Every 4 Weeks</option>
+                 <option value="1">Weekly</option>
+                 <option value="2">2 Weeks</option>
+                 <option value="3">3 Weeks</option>
+                 <option value="4">4 Weeks</option>
               </select>
           </div>
           
-          <div className="flex flex-col gap-2">
-             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Base Week</span>
+          <div className="flex flex-col gap-0.5">
+             <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest px-1">Anchor</span>
              <input 
               type="date"
-              className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm"
+              className="bg-white/80 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-black text-slate-800 outline-none hover:border-slate-400 transition-all cursor-pointer shadow-sm"
               value={state.recurringSupport.baseDate.split('T')[0]}
               onChange={(e) => updateSupportSettings({ baseDate: e.target.value })}
              />
@@ -260,7 +247,7 @@ const App: React.FC = () => {
 
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-3 px-8 py-4 bg-slate-900 text-white rounded-2xl hover:bg-black transition-all shadow-xl font-black text-xs uppercase tracking-widest self-end"
+            className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl hover:bg-black transition-all shadow-md font-black text-[9px] uppercase tracking-widest"
           >
             <Icons.Image />
             <span>Theme</span>
@@ -276,26 +263,24 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="w-full max-w-6xl pb-48 space-y-32">
-        {groupedWeeks.map((weekDates, wIdx) => {
-          const weekLabel = getWeekLabel(weekDates);
-          const isTodayWeek = weekLabel === "This Weekend";
+      <main className="w-full max-w-7xl pb-24 space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3 px-2">
+          {groupedWeeks.map((weekDates, wIdx) => {
+            const weekLabel = getWeekLabel(weekDates);
+            const isTodayWeek = weekLabel === "This Weekend";
 
-          return (
-            <section key={`week-${wIdx}`} className="space-y-12 relative group/week">
-              {/* Timeline Style Placeholder */}
-              <div className="flex flex-col items-center gap-4 sticky top-10 z-20">
-                <div className={`px-10 py-4 rounded-full border text-xs font-black uppercase tracking-[0.4em] shadow-2xl backdrop-blur-3xl transition-all duration-700 transform ${
-                  isTodayWeek 
-                    ? 'bg-slate-900 text-white border-slate-900 scale-110 shadow-slate-300' 
-                    : 'bg-white/95 text-slate-400 border-white/50 group-hover/week:scale-105'
-                }`}>
-                  {weekLabel}
+            return (
+              <React.Fragment key={`week-block-${wIdx}`}>
+                {/* Visual separator for new weeks in the sequence */}
+                <div className="col-span-full mt-4 flex items-center gap-4">
+                  <div className={`px-4 py-1.5 rounded-full border text-[9px] font-black uppercase tracking-[0.2em] shadow-sm backdrop-blur-md transition-all ${
+                    isTodayWeek ? 'bg-slate-900 text-white border-slate-900' : 'bg-white/80 text-slate-400 border-white'
+                  }`}>
+                    {weekLabel}
+                  </div>
+                  <div className={`h-[1px] flex-1 ${isTodayWeek ? 'bg-slate-900/20' : 'bg-slate-200/50'}`} />
                 </div>
-                <div className={`w-px h-12 transition-all duration-700 ${isTodayWeek ? 'bg-slate-900/40' : 'bg-slate-400/20'}`} />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-12 max-w-5xl mx-auto px-4">
+                
                 {weekDates.map((date, dIdx) => {
                   const id = date.toISOString().split('T')[0];
                   const storedDay = state.weekendDays[id];
@@ -309,8 +294,7 @@ const App: React.FC = () => {
                   return (
                     <div 
                       key={id} 
-                      className="animate-in fade-in zoom-in duration-700 fill-mode-both"
-                      style={{ animationDelay: `${dIdx * 150}ms` }}
+                      className="animate-in fade-in zoom-in duration-300"
                     >
                       <WeekendCard 
                         day={dayData}
@@ -320,10 +304,10 @@ const App: React.FC = () => {
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          );
-        })}
+              </React.Fragment>
+            );
+          })}
+        </div>
       </main>
 
       {editingDay && (
@@ -334,28 +318,19 @@ const App: React.FC = () => {
         />
       )}
       
-      <footer className="fixed bottom-12 z-30 pointer-events-none w-full flex justify-center">
-        <div className="bg-white/95 backdrop-blur-3xl px-14 py-8 rounded-full flex items-center gap-20 shadow-2xl border border-white/50 ring-1 ring-black/5 animate-in slide-in-from-bottom duration-1000 pointer-events-auto">
-          <div className="flex items-center gap-5 group">
-            <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.OPEN} shadow-xl shadow-green-100 transition-all group-hover:scale-125`}></div>
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Open</span>
-              <span className="text-[8px] font-bold uppercase text-slate-400">Available</span>
-            </div>
+      <footer className="fixed bottom-6 z-30 pointer-events-none w-full flex justify-center">
+        <div className="bg-slate-900/95 backdrop-blur-2xl px-8 py-3 rounded-2xl flex items-center gap-8 shadow-2xl border border-white/10 animate-in slide-in-from-bottom duration-700 pointer-events-auto">
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.OPEN}`}></div>
+            <span className="text-[8px] font-black uppercase tracking-widest text-white/70">Open</span>
           </div>
-          <div className="flex items-center gap-5 group">
-            <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.BUSY} shadow-xl shadow-red-100 transition-all group-hover:scale-125`}></div>
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Busy</span>
-              <span className="text-[8px] font-bold uppercase text-slate-400">Planned</span>
-            </div>
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full bg-gradient-to-br ${APP_CONFIG.COLORS.BUSY}`}></div>
+            <span className="text-[8px] font-black uppercase tracking-widest text-white/70">Busy</span>
           </div>
-          <div className="flex items-center gap-5 group">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 shadow-xl shadow-orange-100 transition-all group-hover:scale-125"></div>
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-900">Support</span>
-              <span className="text-[8px] font-bold uppercase text-slate-400">On Call</span>
-            </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+            <span className="text-[8px] font-black uppercase tracking-widest text-white/70">Support</span>
           </div>
         </div>
       </footer>

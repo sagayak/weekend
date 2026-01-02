@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { WeekendDay } from '../types';
-import { Icons, APP_CONFIG } from '../constants';
+import { APP_CONFIG } from '../constants';
 
 interface Props {
   day: WeekendDay;
@@ -10,81 +10,57 @@ interface Props {
 }
 
 const WeekendCard: React.FC<Props> = ({ day, activeSupport, onEdit }) => {
-  const formattedDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(day.date);
+  const dateNum = day.date.getDate();
+  const monthStr = new Intl.DateTimeFormat('en-US', { month: 'short' }).format(day.date);
+  const dayAbbr = day.type === 'Saturday' ? 'SAT' : 'SUN';
   
   const statusColors = day.isBusy ? APP_CONFIG.COLORS.BUSY : APP_CONFIG.COLORS.OPEN;
   const isToday = new Date().toISOString().split('T')[0] === day.id;
 
   return (
     <div 
-      className={`card-zoom group relative rounded-[2.5rem] p-8 h-80 flex flex-col cursor-pointer overflow-hidden transition-all shadow-xl hover:shadow-2xl active:scale-95 ${
-        isToday ? 'ring-4 ring-slate-900 ring-offset-4' : ''
+      className={`card-zoom group relative rounded-2xl h-16 flex items-center px-4 cursor-pointer overflow-hidden transition-all shadow-sm hover:shadow-lg active:scale-95 border border-white/10 ${
+        isToday ? 'ring-2 ring-slate-900 ring-offset-1' : ''
       }`}
       onClick={onEdit}
     >
-      {/* Background Fill Layer - This fills the entire card with the status color */}
-      <div className={`absolute inset-0 bg-gradient-to-br ${statusColors} opacity-100 transition-all duration-500`} />
+      {/* High-visibility background status */}
+      <div className={`absolute inset-0 bg-gradient-to-br ${statusColors} transition-all duration-500`} />
       
-      {/* Dynamic Glow Effect */}
-      <div className="absolute -inset-2 bg-white/10 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+      {/* Subtle support pattern */}
+      {activeSupport && (
+        <div className="absolute inset-0 opacity-15 pointer-events-none" 
+             style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.2) 10px, rgba(255,255,255,0.2) 20px)' }} />
+      )}
 
-      {/* Date Header - Reversed as requested: Date is big, Day name is small */}
-      <div className="flex justify-between items-start mb-6 relative z-10">
-        <div>
-          <h3 className="text-4xl font-black tracking-tighter text-white drop-shadow-md">{formattedDate}</h3>
-          <p className="text-white/80 font-black uppercase tracking-[0.2em] text-[10px] mt-1">{day.type}</p>
+      {/* Card Content Layout */}
+      <div className="relative z-10 w-full flex items-center justify-between gap-2">
+        <div className="flex items-baseline gap-2">
+          <span className="text-xl font-black text-white drop-shadow-sm leading-none">
+            {dateNum}
+          </span>
+          <span className="text-[10px] font-black text-white/80 uppercase tracking-tighter leading-none">
+            {monthStr}
+          </span>
+          <span className="text-[10px] font-medium text-white/60 ml-1 border-l border-white/20 pl-2 leading-none">
+            {dayAbbr}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          {day.recurring !== 'none' && (
-            <div className="p-2 bg-white/20 border border-white/30 rounded-xl text-white shadow-lg backdrop-blur-sm" title={`Recurring: ${day.recurring}`}>
-              <Icons.Repeat />
-            </div>
-          )}
-          {activeSupport && (
-            <div className="p-2 bg-orange-400 border border-white/30 rounded-xl text-white shadow-lg animate-pulse backdrop-blur-sm" title="Support Day">
-              <Icons.Calendar />
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Plan Area */}
-      <div className="flex-1 flex flex-col justify-center relative z-10">
-        {day.plan ? (
-          <p className="text-white text-2xl font-black leading-tight drop-shadow-lg group-hover:scale-[1.02] transition-transform">
-            {day.plan}
-          </p>
-        ) : (
-          <p className="text-white/40 font-bold italic text-sm">Open to possibilities...</p>
-        )}
-      </div>
-
-      {/* Badges / Footer */}
-      <div className="mt-6 flex items-center justify-between relative z-10">
-        <div className="flex gap-2">
+        <div className="flex items-center gap-1.5">
           {activeSupport && (
-            <span className="bg-orange-500 text-white border border-white/40 text-[9px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest shadow-lg">
+            <span className="bg-orange-500 text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest shadow-lg border border-white/20 flex items-center gap-1 animate-pulse">
+              <span className="w-1 h-1 bg-white rounded-full"></span>
               Support
             </span>
           )}
-          <span className={`text-[9px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border bg-white/20 text-white border-white/40 backdrop-blur-md`}>
-            {day.isBusy ? 'Busy' : 'Open'}
-          </span>
-        </div>
-        
-        <div className="p-3 bg-white/20 rounded-2xl opacity-0 group-hover:opacity-100 transition-all hover:bg-white/40 border border-white/30 text-white">
-          <Icons.Edit />
+          {day.plan && (
+             <div className="bg-white/20 p-1 rounded-md">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+             </div>
+          )}
         </div>
       </div>
-
-      {/* Support Visual Overlay Corner Ribbon */}
-      {activeSupport && (
-        <div className="absolute top-0 right-0 w-32 h-32 pointer-events-none overflow-hidden">
-           <div className="absolute top-0 right-0 w-[150%] h-12 bg-orange-400 rotate-45 translate-x-12 -translate-y-4 shadow-2xl border-b border-white/40 flex items-center justify-center">
-              <span className="text-[8px] font-black text-white uppercase tracking-[0.2em] mt-4">Support</span>
-           </div>
-        </div>
-      )}
     </div>
   );
 };
