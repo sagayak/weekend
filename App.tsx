@@ -1,21 +1,33 @@
 
 /**
- * SUPABASE SQL SCHEMA
- * Run this in your Supabase SQL Editor to ensure the tables are ready:
+ * SUPABASE SQL SCHEMA - UPDATED
+ * Run this in your Supabase SQL Editor to fix the "updated_at" error:
  * 
+ * -- 1. Update the plans table
  * CREATE TABLE IF NOT EXISTS public.weekend_plans (
  *   id text PRIMARY KEY,
  *   date date NOT NULL,
  *   type text NOT NULL,
  *   plan text,
  *   is_busy boolean DEFAULT false,
- *   is_support boolean DEFAULT false
+ *   is_support boolean DEFAULT false,
+ *   created_at timestamptz DEFAULT now(),
+ *   updated_at timestamptz DEFAULT now()
  * );
  * 
+ * -- 2. Update the settings table
  * CREATE TABLE IF NOT EXISTS public.weekend_settings (
  *   id bigint PRIMARY KEY,
- *   recurring_support jsonb
+ *   recurring_support jsonb,
+ *   created_at timestamptz DEFAULT now(),
+ *   updated_at timestamptz DEFAULT now()
  * );
+ * 
+ * -- 3. If the table already exists, just add the missing columns:
+ * -- ALTER TABLE public.weekend_plans ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+ * -- ALTER TABLE public.weekend_plans ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+ * -- ALTER TABLE public.weekend_settings ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+ * -- ALTER TABLE public.weekend_settings ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -25,7 +37,6 @@ import WeekendCard from './components/WeekendCard';
 import EditModal from './components/EditModal';
 import { supabase } from './supabaseClient';
 
-// Helper to ensure IDs are ALWAYS YYYY-MM-DD regardless of local timezone/offset
 const formatDateId = (date: Date) => {
   const d = new Date(date);
   const year = d.getFullYear();
@@ -35,9 +46,8 @@ const formatDateId = (date: Date) => {
 };
 
 const App: React.FC = () => {
-  const STORAGE_KEY = 'zenweekend_v11_stable';
+  const STORAGE_KEY = 'zenweekend_v12_final';
 
-  // 1. Initial Load from Local Storage (Instant UI)
   const [state, setState] = useState<AppState>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -72,7 +82,6 @@ const App: React.FC = () => {
   const [editingDay, setEditingDay] = useState<WeekendDay | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 2. Sync from Supabase (Cloud -> Local)
   useEffect(() => {
     const syncWithCloud = async () => {
       setLoading(true);
@@ -92,7 +101,7 @@ const App: React.FC = () => {
               date: d,
               type: p.type as any,
               plan: p.plan || '',
-              isBusy: Boolean(p.is_busy), // Explicit Boolean cast
+              isBusy: Boolean(p.is_busy),
               isSupport: Boolean(p.is_support),
               recurring: 'none' 
             };
@@ -103,12 +112,9 @@ const App: React.FC = () => {
 
         setState(prev => {
           const mergedDays = { ...prev.weekendDays };
-          
           Object.keys(cloudPlans).forEach(id => {
             const cloudDay = cloudPlans[id];
             const localDay = mergedDays[id];
-            
-            // Protect local unsynced content
             const localHasContent = localDay && (localDay.isBusy || (localDay.plan && localDay.plan.trim() !== ''));
             const cloudIsEmpty = !cloudDay.isBusy && (!cloudDay.plan || cloudDay.plan.trim() === '');
 
@@ -131,7 +137,6 @@ const App: React.FC = () => {
     syncWithCloud();
   }, []);
 
-  // 3. Local Persistence
   useEffect(() => {
     if (!loading) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -189,9 +194,15 @@ const App: React.FC = () => {
       }, { onConflict: 'id' });
       
       if (error) throw error;
+      console.log("✅ Sync success");
     } catch (e: any) {
       console.error("Sync Error:", e.message);
-      setLastError(e.message || "Unknown Cloud Error");
+      // More helpful message for specific known errors
+      if (e.message?.includes('updated_at')) {
+        setLastError("Missing 'updated_at' column in DB. Run the SQL fix.");
+      } else {
+        setLastError(e.message || "Unknown Cloud Error");
+      }
     } finally {
       setSyncing(false);
     }
@@ -199,11 +210,15 @@ const App: React.FC = () => {
 
   const updateSupportSettings = async (updates: Partial<RecurringSupportSettings>) => {
     setSyncing(true);
+    setLastError(null);
     const newSettings = { ...state.recurringSupport, ...updates };
     setState(prev => ({ ...prev, recurringSupport: newSettings }));
     try {
-      await supabase.from('weekend_settings').upsert({ id: 1, recurring_support: newSettings }, { onConflict: 'id' });
-    } catch (e) {} finally { setSyncing(false); }
+      const { error } = await supabase.from('weekend_settings').upsert({ id: 1, recurring_support: newSettings }, { onConflict: 'id' });
+      if (error) throw error;
+    } catch (e: any) {
+      setLastError(e.message || "Settings Sync Error");
+    } finally { setSyncing(false); }
   };
 
   const isDateSupport = (targetDate: Date) => {
@@ -234,9 +249,9 @@ const App: React.FC = () => {
         <div>
           <h1 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-1 drop-shadow-sm">ZenWeekend</h1>
           <div className="flex items-center gap-2">
-            <div className={`w-2.5 h-2.5 rounded-full ${lastError ? 'bg-red-500' : (syncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500')}`} />
-            <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest">
-              {lastError ? `Sync Failed: ${lastError}` : (syncing ? 'Syncing...' : 'Cloud Active')}
+            <div className={`w-2.5 h-2.5 rounded-full ${lastError ? 'bg-red-500 animate-pulse' : (syncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500')}`} />
+            <p className={`text-[10px] font-black uppercase tracking-widest ${lastError ? 'text-red-600' : 'text-slate-500'}`}>
+              {lastError ? `Fix Required: ${lastError}` : (syncing ? 'Syncing...' : 'Cloud Active')}
             </p>
           </div>
         </div>
@@ -281,6 +296,14 @@ const App: React.FC = () => {
       </header>
 
       <main className="w-full max-w-7xl pb-24 space-y-4">
+        {lastError && lastError.includes('updated_at') && (
+          <div className="bg-red-50 border border-red-200 p-4 rounded-2xl mb-6 animate-in slide-in-from-top-4 duration-500">
+            <p className="text-red-800 text-[11px] font-bold">
+              ⚠️ Database Error: Your Supabase table is missing the "updated_at" column. Please run the SQL script provided in the App.tsx file comments.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3 px-2">
           {groupedWeeks.map((weekDates, wIdx) => {
             const weekLabel = getWeekLabel(weekDates);
